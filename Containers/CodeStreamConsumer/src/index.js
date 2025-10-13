@@ -40,6 +40,8 @@ app.get('/timers', (req, res) => {
     page += `<p>Total processed files: ${totalFiles}</p>`;
     page += `<p>Average Total Time: ${avgTotal.toFixed(2)} µs</p>`;
     page += `<p>Average Match Time: ${avgMatch.toFixed(2)} µs</p>`;
+    page += `<p>Average Time per Line: ${(avgTotal / (fileTimingStats.reduce((a,f)=>a+f.lineCount,0)||1)).toFixed(2)} µs</p>`;
+
 
     page += '<table border="1" cellpadding="5" cellspacing="0"><tr><th>Filename</th><th>Lines</th><th>Total Time (µs)</th><th>Match Time (µs)</th><th>Timestamp</th></tr>';
     fileTimingStats.slice(-100).forEach(stat => {

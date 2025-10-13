@@ -82,38 +82,34 @@ class CloneDetector {
   }
 
   #filterCloneCandidates(file, compareFile) {
-    // TODO
-    // For each chunk in file.chunks, find all #chunkMatch() in compareFile.chunks
-    // For each matching chunk, create a new Clone.
-    // Store the resulting (flat) array in file.instances.
-    //
-    // TIP 1: Array.filter to find a set of matches, Array.map to return a new array with modified objects.
-    // TIP 2: You can daisy-chain calls to filter().map().filter().flat() etc.
-    // TIP 3: Remember that file.instances may have already been created, so only append to it.
-    //
-    // Return: file, including file.instances which is an array of Clone objects (or an empty array).
-    //
-
+    // Ensure instances array exists
     file.instances = file.instances || [];
 
-    // create a Clone for each match, and flatten the result into an array
-    const newInstances = file.chunks.flatMap((chunk1) =>
-      compareFile.chunks
-        .filter((chunk2) => this.#chunkMatch(chunk1, chunk2))
-        .map(
-          (chunk2) =>
-            new Clone(
-              file.name,
-              chunk1[0].lineNumber,
-              compareFile.name,
-              chunk2[0].lineNumber,
-              this.#myChunkSize
-            )
-        )
-    );
+    file.chunks.forEach((chunk) => {
+      compareFile.chunks.forEach((cChunk) => {
+        // Skip empty chunks or undefined lines
+        if (!chunk || !cChunk || chunk.length === 0 || cChunk.length === 0)
+          return;
+        if (chunk.some((line) => !line || !line.hasContent())) return;
+        if (cChunk.some((line) => !line || !line.hasContent())) return;
 
-    // Append new clones to existing instances
-    file.instances = file.instances.concat(newInstances);
+        // Check if chunks match
+        if (this.#chunkMatch(chunk, cChunk)) {
+          // Create new Clone safely
+          const newClone = new Clone(
+            chunk.map((l) => l.lineNumber), // source lines
+            cChunk.map((l) => l.lineNumber), // target lines
+            chunk.map((l) => l.content), // original code content
+            chunk[0].sourceFile, // source file name
+            cChunk[0].sourceFile // target file name
+          );
+
+          // Add to instances
+          file.instances.push(newClone);
+        }
+      });
+    });
+
     return file;
   }
 
