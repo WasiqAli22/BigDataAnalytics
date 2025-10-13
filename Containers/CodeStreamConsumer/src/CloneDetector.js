@@ -95,6 +95,24 @@ class CloneDetector {
     //
 
     file.instances = file.instances || [];
+
+    // create a Clone for each match, and flatten the result into an array
+    const newInstances = file.chunks.flatMap((chunk1) =>
+      compareFile.chunks
+        .filter((chunk2) => this.#chunkMatch(chunk1, chunk2))
+        .map(
+          (chunk2) =>
+            new Clone(
+              file.name,
+              chunk1[0].lineNumber,
+              compareFile.name,
+              chunk2[0].lineNumber,
+              this.#myChunkSize
+            )
+        )
+    );
+
+    // Append new clones to existing instances
     file.instances = file.instances.concat(newInstances);
     return file;
   }
@@ -113,6 +131,17 @@ class CloneDetector {
     // Return: file, with file.instances only including Clones that have been expanded as much as they can,
     //         and not any of the Clones used during that expansion.
     //
+    //--------------------------------------------------------------------------------
+    // Expand each clone by checking overlaps with accumulated clones
+    const expanded = file.instances.reduce((acc, clone) => {
+      const overlapping = acc.find((c) => c.maybeExpandWith(clone));
+      if (!overlapping) acc.push(clone);
+      return acc;
+    }, []);
+
+    // Update file.instances to only include fully expanded clones
+
+    file.instances = expanded;
 
     return file;
   }
@@ -131,6 +160,18 @@ class CloneDetector {
     // Return: file, with file.instances containing unique Clone objects that may contain several targets
     //
 
+    //---------------------------------------------------------------------------
+    // Reduce file.instances into unique clones, combining targets where necessary
+
+    const consolidated = file.instances.reduce((acc, clone) => {
+      const existing = acc.find((c) => c.equals(clone));
+      if (existing) existing.addTarget(clone);
+      else acc.push(clone);
+      return acc;
+    }, []);
+    // Update file.instances with consolidated clones
+
+    file.instances = consolidated;
     return file;
   }
 
