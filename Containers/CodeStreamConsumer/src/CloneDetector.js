@@ -11,15 +11,16 @@ const Clone = require("./Clone");
 const DEFAULT_CHUNKSIZE = 5;
 
 class CloneDetector {
-  #myChunkSize = process.env.CHUNKSIZE || DEFAULT_CHUNKSIZE;
+  #myChunkSize = Number(process.env.CHUNKSIZE) || DEFAULT_CHUNKSIZE;
   #myFileStore = FileStorage.getInstance();
 
   constructor() {}
 
-  // Private Methods
+  // --------------------
+  // Private helpers
   // --------------------
   #filterLines(file) {
-    let lines = file.contents.split("\n");
+    const lines = file.contents.split("\n");
     let inMultiLineComment = false;
     file.lines = [];
 
@@ -46,7 +47,6 @@ class CloneDetector {
 
       file.lines.push(new SourceLine(i + 1, line.trim()));
     }
-
     return file;
   }
 
@@ -55,123 +55,130 @@ class CloneDetector {
   }
 
   #chunkify(file) {
-    let chunkSize = this.#myChunkSize;
-    let lines = this.#getContentLines(file);
+    const chunkSize = this.#myChunkSize;
+    const lines = this.#getContentLines(file);
     file.chunks = [];
 
     for (let i = 0; i <= lines.length - chunkSize; i++) {
-      let chunk = lines.slice(i, i + chunkSize);
+      const chunk = lines.slice(i, i + chunkSize);
       file.chunks.push(chunk);
     }
     return file;
   }
 
   #chunkMatch(first, second) {
-    let match = true;
-
-    if (first.length != second.length) {
-      match = false;
+    if (first.length !== second.length) return false;
+    for (let i = 0; i < first.length; i++) {
+      if (!first[i].equals(second[i])) return false;
     }
-    for (let idx = 0; idx < first.length; idx++) {
-      if (!first[idx].equals(second[idx])) {
-        match = false;
+    return true;
+  }
+
+  /**
+   * Todo-1: Identify potential clone pairs based on identical chunks.
+   * For every matching chunk found between two files,
+   * we create a new Clone instance referencing both sides.
+   */
+  #filterCloneCandidates(file, compareFile) {
+    // ensure this file has a list to store any detected clone candidates
+    file.instances = file.instances || [];
+    // compare each chunk in the current file with all chunks in the other file
+    for (const chunk of file.chunks) {
+      for (const other of compareFile.chunks) {
+        // if chunks match, create a new clone candidate
+        if (this.#chunkMatch(chunk, other)) {
+          try {
+            // Clone expects full chunk objects, not just their line numbers
+            const clone = new Clone(file.name, compareFile.name, chunk, other);
+            file.instances.push(clone);
+          } catch (err) {
+            console.error("Error while creating clone candidate:", err.message);
+          }
+        }
       }
     }
-
-    return match;
-  }
-
-  #filterCloneCandidates(file, compareFile) {
-    // Ensure instances array exists
-    file.instances = file.instances || [];
-
-    file.chunks.forEach((chunk) => {
-      compareFile.chunks.forEach((cChunk) => {
-        // Skip empty chunks or undefined lines
-        if (!chunk || !cChunk || chunk.length === 0 || cChunk.length === 0)
-          return;
-        if (chunk.some((line) => !line || !line.hasContent())) return;
-        if (cChunk.some((line) => !line || !line.hasContent())) return;
-
-        // Check if chunks match
-        if (this.#chunkMatch(chunk, cChunk)) {
-          // Create new Clone safely
-          const newClone = new Clone(
-            chunk.map((l) => l.lineNumber), // source lines
-            cChunk.map((l) => l.lineNumber), // target lines
-            chunk.map((l) => l.content), // original code content
-            chunk[0].sourceFile, // source file name
-            cChunk[0].sourceFile // target file name
-          );
-
-          // Add to instances
-          file.instances.push(newClone);
-        }
-      });
-    });
-
     return file;
   }
 
-  #expandCloneCandidates(file) {
-    // TODO
-    // For each Clone in file.instances, try to expand it with every other Clone
-    // (using Clone::maybeExpandWith(), which returns true if it could expand)
-    //
-    // Comment: This should be doable with a reduce:
-    //          For every new element, check if it overlaps any element in the accumulator.
-    //          If it does, expand the element in the accumulator. If it doesn't, add it to the accumulator.
-    //
-    // ASSUME: As long as you traverse the array file.instances in the "normal" order, only forward expansion is necessary.
-    //
-    // Return: file, with file.instances only including Clones that have been expanded as much as they can,
-    //         and not any of the Clones used during that expansion.
-    //
-    //--------------------------------------------------------------------------------
-    // Expand each clone by checking overlaps with accumulated clones
-    const expanded = file.instances.reduce((acc, clone) => {
-      const overlapping = acc.find((c) => c.maybeExpandWith(clone));
-      if (!overlapping) acc.push(clone);
-      return acc;
-    }, []);
+  /**
+   * Todo-2: Extend existing clone candidates.
+  * When two detected candidates are found to be adjacent (via the sliding-window),
+ * they can be merged into a longer continuous clone using Clone.maybeExpandWith().
+ *
+ *  * Expansion is done per target file to ensure clones from different
+ * comparison files aren’t accidentally merged together.
 
-    // Update file.instances to only include fully expanded clones
+    */
+  #expandCloneCandidates(file) {
+    if (!file.instances || file.instances.length === 0) return file;
+
+    // Expand each clone by checking overlaps with accumulated clones
+    const byTarget = new Map();
+    for (const c of file.instances) {
+      const targetName =
+        (c.targets && c.targets[0] && c.targets[0].name) || "__unknown__";
+      if (!byTarget.has(targetName)) byTarget.set(targetName, []);
+      byTarget.get(targetName).push(c);
+    }
+
+    const expanded = [];
+
+    for (const [, clones] of byTarget) {
+      // sort clones by their starting line in the source file
+
+      clones.sort((a, b) => a.sourceStart - b.sourceStart);
+
+      let current = null;
+      for (const cand of clones) {
+        if (!current) {
+          current = cand;
+          continue;
+        }
+        // try to merge if the next candidate directly follows the current one
+        if (!current.maybeExpandWith(cand)) {
+          // if merge is not possible, store the current one and move on
+          expanded.push(current);
+          current = cand;
+        }
+      }
+      // add the last processed clone if available
+
+      if (current) expanded.push(current);
+    }
 
     file.instances = expanded;
-
     return file;
   }
 
+  /**
+   * Todo3: Merge overlapping or duplicate clone entries.
+   * After expansion, multiple clone records may refer to the same
+   * source range but different targets — we combine them to avoid duplication.
+   */
   #consolidateClones(file) {
-    // TODO
-    // For each clone, accumulate it into an array if it is new
-    // If it isn't new, update the existing clone to include this one too
-    // using Clone::addTarget()
-    //
-    // TIP 1: Array.reduce() with an empty array as start value.
-    //        Push not-seen-before clones into the accumulator
-    // TIP 2: There should only be one match in the accumulator
-    //        so Array.find() and Clone::equals() will do nicely.
-    //
-    // Return: file, with file.instances containing unique Clone objects that may contain several targets
-    //
+    // nothing to consolidate if no clones exist
 
-    //---------------------------------------------------------------------------
-    // Reduce file.instances into unique clones, combining targets where necessary
+    if (!file.instances || file.instances.length === 0) return file;
 
-    const consolidated = file.instances.reduce((acc, clone) => {
-      const existing = acc.find((c) => c.equals(clone));
-      if (existing) existing.addTarget(clone);
-      else acc.push(clone);
-      return acc;
-    }, []);
-    // Update file.instances with consolidated clones
+    const map = new Map();
+    for (const c of file.instances) {
+      // unique key based on source file and its start-end range
 
-    file.instances = consolidated;
+      const key = `${c.sourceName}:${c.sourceStart}-${c.sourceEnd}`;
+      if (map.has(key)) {
+        // merge additional targets into the existing clone
+        map.get(key).addTarget(c);
+      } else {
+      }
+      map.set(key, c);
+    }
+    // replace file clone list with consolidated set
+    file.instances = Array.from(map.values());
     return file;
   }
 
-  // Public Processing Steps
+  // --------------------
+  // Public API used by index.js
   // --------------------
   preprocess(file) {
     return new Promise((resolve, reject) => {
@@ -192,27 +199,14 @@ class CloneDetector {
   }
 
   matchDetect(file) {
-    let allFiles = this.#myFileStore.getAllFiles();
+    const allFiles = this.#myFileStore.getAllFiles();
     file.instances = file.instances || [];
-    for (let f of allFiles) {
-      // TODO implement these methods (or re-write the function matchDetect() to your own liking)
-      //
-      // Overall process:
-      //
-      // 1. Find all equal chunks in file and f. Represent each matching pair as a Clone.
-      //
-      // 2. For each Clone with endLine=x, merge it with Clone with endLine-1=x
-      //    remove the now redundant clone, rinse & repeat.
-      //    note that you may end up with several "root" Clones for each processed file f
-      //    if there are more than one clone between the file f and the current
-      //
-      // 3. If the same clone is found in several places, consolidate them into one Clone.
-      //
+
+    for (const f of allFiles) {
       file = this.#filterCloneCandidates(file, f);
       file = this.#expandCloneCandidates(file);
       file = this.#consolidateClones(file);
     }
-
     return file;
   }
 
