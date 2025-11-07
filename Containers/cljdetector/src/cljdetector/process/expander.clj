@@ -62,27 +62,8 @@
                merged-clone)))))
 
 (defn expand-clones []
-  (let [dbconnection (storage/get-dbconnection)
-        initial-candidates (storage/count-items "candidates")]
-    (println (format "DEBUG expand-clones: Starting expansion with %d candidates" initial-candidates))
-    (if (> initial-candidates 0)
-      (loop [candidate (storage/get-one-candidate dbconnection)
-             processed 0]
-        (if candidate
-          (do
-            (when (= 0 (mod processed 100))
-              (let [remaining (storage/count-items "candidates")
-                    clones-count (storage/count-items "clones")]
-                (println (format "Progress: processed %d candidates, %d remaining, %d clones stored"
-                                 processed remaining clones-count))))
-            (try
-              (storage/store-clone! dbconnection (maybe-expand dbconnection candidate))
-              (catch Exception e
-                (println (format "ERROR processing candidate %d: %s" processed (.getMessage e)))
-                (.printStackTrace e)))
-            (recur (storage/get-one-candidate dbconnection) (inc processed)))
-          (do
-            (let [final-clones (storage/count-items "clones")]
-              (println (format "Expansion complete: processed %d candidates, created %d clones"
-                               processed final-clones))))))
-      (println "DEBUG expand-clones: No candidates found, skipping expansion"))))
+  (let [dbconnection (storage/get-dbconnection)]
+    (loop [candidate (storage/get-one-candidate dbconnection)]
+      (when candidate
+        (storage/store-clone! dbconnection (maybe-expand dbconnection candidate))
+        (recur (storage/get-one-candidate dbconnection))))))

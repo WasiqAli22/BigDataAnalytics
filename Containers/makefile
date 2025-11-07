@@ -1,20 +1,39 @@
-all: corpusGetter codeStreamGenerator codeStreamConsumer cljDetector
+cwd := $(shell pwd)
 
-corpusGetter:
-	cd CorpusGetter && docker build -t corpusgetter .
+s1: cljDetector
 
-corpusGetterFull:
-	cd CorpusGetter && docker build -t corpusgetter . --no-cache
+corpusVolume:
+	@docker volume create qc-volume
 
+corpusGet: corpusVolume
+	@docker run -it -v qc-volume:/QualitasCorpus -v ./Containers/CorpusGetter:/Download --name qc-getter corpusgetter ./qc-get.sh INSTALL
 
-codeStreamGenerator:
-	cd CodeStreamGenerator && docker build -t csgenerator .
+corpusCheck: corpusVolume
+	@docker run -it -v qc-volume:/QualitasCorpus --name qc-getter corpusgetter
 
-codeStreamConsumer:
-	cd CodeStreamConsumer && docker build -t csconsumer .
+codeStream: corpusVolume
+	@docker compose -f stream-of-code.yaml up
 
-cljDetector:
-	cd cljdetector && docker build -t cljdetector .
+build-cg: corpusVolume
+	@cd ./Containers && make corpusGetterFull
+
+cljDetector: corpusVolume
+	@docker compose -f all-at-once.yaml up
+
+mongodb:
+	@docker compose -f all-at-once.yaml up dbstorage
+
+mongosh:
+	@docker exec -it bigdataanalytics-dbstorage-1 mongosh
+
+doc:
+	@emacs --batch --file ./Documentation/Big-Data-Analytics.org --eval "(org-texinfo-export-to-info)"
+	@texi2pdf ./Documentation/Big-Data-Analytics.texi --command=@afourpaper -q -c -o ./Documentation/Big-Data-Analytics.pdf
+	@texi2any --html --no-split ./Documentation/Big-Data-Analytics.texi -o ./Documentation/Big-Data-Analytics.html
 
 clean:
-	docker rmi --force corpusgetter csgenerator
+	@docker rm -f qc-getter cs-generator cs-consumer
+
+deepclean: clean
+	@docker rmi corpusgetter
+	@docker volume rm qc-volume

@@ -2,37 +2,16 @@
 
 version: "3.8"
 services:
-  
-  monitortool:
-    build:
-      context: ./Containers/MonitorTool
-      dockerfile: Dockerfile
-    image: monitortool:local
-    environment:
-      - MONGO_HOST=dbstorage
-      - MONGO_PORT=27017
-      - MONGO_DB=cljdetector
-      - SAMPLE_SEC=30
-      - KEEP_POINTS=720
-    depends_on:
-      - dbstorage
-    ports:
-      - "8090:8080"
-
   clone-detector:
     image: cljdetector
-    command: CLEAR
-    restart: "no"
+    # command: clear  # Remove 'clear' to run full clone detection, or use 'clear' only to clear DB 
     ports:
       - 8080:3000
     volumes:
       - ./Containers/cljdetector:/usr/src/app
       - qc-volume:/QualitasCorpus
-    depends_on:
-      - dbstorage
     environment:
       DBHOST: dbstorage
-      MONGO_DB: cljdetector
       SOURCEDIRtest: "/usr/src/app/test/data"
       SOURCEDIReclipse: "/QualitasCorpus/QualitasCorpus-20130901r/Systems/eclipse_SDK"
       SOURCEDIR: "/QualitasCorpus"
@@ -49,11 +28,22 @@ services:
     volumes:
       - dbstorage:/data/db
       - dbconfig:/data/configdb
-  
- 
+
+  monitortool:
+    build: ./Containers/MonitorTool
+    image: monitortool:latest
+    environment:
+      - DBHOST=dbstorage
+      - DBNAME=cloneDetector
+      - INTERVAL_MS=10000
+      - PORT=4000
+    ports:
+      - "4000:4000"
+    depends_on:
+      - dbstorage
+
 volumes:
   dbstorage:
   dbconfig:
   qc-volume:
     external: true
-    
