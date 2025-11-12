@@ -8,31 +8,16 @@
 (def source-dir (or (System/getenv "SOURCEDIR") "/tmp"))
 (def source-type #".*\.java")
 
-(defn ts-println
-  "Print timestamped message to stdout and also try to write to DB via storage/addUpdate!
-   Use ns-resolve to lookup addUpdate! so we do not crash at compile time if not present.
-   Errors while attempting DB write are caught and printed but do not stop execution."
-  [& args]
-  (let [iso  (.toString (java.time.LocalDateTime/now))
-        ts   (System/currentTimeMillis)
-        msg  (apply str (interpose " " args))]
-    ;; Always print locally
-    (println iso msg)
-    ;; Try to store the update (non-fatal if it fails or method missing)
-    (try
-      (let [add-fn (ns-resolve 'cljdetector.storage.storage 'addUpdate!)]
-        (when (and add-fn (fn? (deref add-fn)))
-          ;; call resolved var (deref to get var->fn)
-          ((deref add-fn) {:ts ts :iso iso :msg msg})))
-      (catch Exception e
-        (println "ts-println: failed to write status update to DB:" (.getMessage e))))
-    ;; return nil for convenience
-    nil))
+(defn ts-println [& args]
+  (let [timestamp (java.time.LocalDateTime/now)
+        message (string/join " " args)] ; Handles multiple args like "Storing chunks..."
+    (println (.toString timestamp) message)
+    (storage/addUpdate! timestamp message))) ; Call to new storage function
 
 (defn maybe-clear-db [args]
   (when (some #{"CLEAR"} (map string/upper-case args))
-    (ts-println "Clearing database...")
-    (storage/clear-db!)))
+      (ts-println "Clearing database...")
+      (storage/clear-db!)))
 
 (defn maybe-read-files [args]
   (when-not (some #{"NOREAD"} (map string/upper-case args))
@@ -47,13 +32,21 @@
       (storage/store-chunks! chunks))))
 
 (defn maybe-detect-clones [args]
-  (when-not (some #{"NOCLONEID"} (map string/upper-case args))
+  (when-not (some #{"NOCLONEID"} (map string/upper-case args)) ; <-- FIXED
+    (ts-println "Creating chunks index...")
+    (storage/create-chunks-index!)
+    
     (ts-println "Identifying Clone Candidates...")
     (storage/identify-candidates!)
+    
     (ts-println "Found" (storage/count-items "candidates") "candidates")
+    
+    (ts-println "Creating candidates index...")
+    (storage/create-candidates-index!)
+    
     (ts-println "Expanding Candidates...")
     (expander/expand-clones)))
-
+    
 (defn pretty-print [clones]
   (doseq [clone clones]
     (println "====================\n" "Clone with" (count (:instances clone)) "instances:")
@@ -66,6 +59,8 @@
     (ts-println "Consolidating and listing clones...")
     (pretty-print (storage/consolidate-clones-and-source))))
 
+
+
 (defn -main
   "Starting Point for All-At-Once Clone Detection
   Arguments:
@@ -74,6 +69,7 @@
    - NoCloneID do not detect clones
    - List print a list of all clones"
   [& args]
+
   (maybe-clear-db args)
   (maybe-read-files args)
   (maybe-detect-clones args)

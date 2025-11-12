@@ -11,58 +11,57 @@
 (def collnames ["files"  "chunks" "candidates" "clones" "statusUpdates"])
 
 (defn print-statistics []
-  (let [conn (mg/connect {:host hostname})
+  (let [conn (mg/connect {:host hostname})        
         db (mg/get-db conn dbname)]
     (doseq [coll collnames]
       (println "db contains" (mc/count db coll) coll))))
 
 (defn clear-db! []
-  (let [conn (mg/connect {:host hostname})
+  (let [conn (mg/connect {:host hostname})        
         db (mg/get-db conn dbname)]
     (doseq [coll collnames]
       (mc/drop db coll))))
 
 (defn count-items [collname]
-  (let [conn (mg/connect {:host hostname})
+  (let [conn (mg/connect {:host hostname})        
         db (mg/get-db conn dbname)]
     (mc/count db collname)))
 
+(defn- slurp-safely
+  "A helper function to slurp a file, returning nil on failure."
+  [file]
+  (try
+    {:fileName (.getPath file) :contents (slurp file)}
+    (catch Exception e
+      (println (str "!!! SKIPPING FILE: Failed to read " (.getPath file) " - Error: " (.getMessage e)))
+      nil))) ; Return nil if slurp fails
+
 (defn store-files! [files]
-  (let [conn (mg/connect {:host hostname})
+  (let [conn (mg/connect {:host hostname})        
         db (mg/get-db conn dbname)
         collname "files"
         file-parted (partition-all partition-size files)]
-    (try (doseq [file-group file-parted]
-           (mc/insert-batch db collname (map (fn [%] {:fileName (.getPath %) :contents (slurp %)}) file-group)))
-         (catch Exception e []))))
+    (doseq [file-group file-parted]
+      ; 1. Map each file to our 'slurp-safely' function
+      ; 2. Remove any 'nil' results (the files that failed)
+      (let [safe-files (remove nil? (map slurp-safely file-group))]
+        ; 3. Only insert the batch if it's not empty
+        (when (not-empty safe-files)
+          (try
+            (mc/insert-batch db collname safe-files)
+            (catch Exception e 
+              (println (str "!!! DB ERROR: Failed to insert file batch - " (.getMessage e))))))))))
 
 (defn store-chunks! [chunks]
-  (let [conn (mg/connect {:host hostname})
+  (let [conn (mg/connect {:host hostname})        
         db (mg/get-db conn dbname)
         collname "chunks"
         chunk-parted (partition-all partition-size (flatten chunks))]
     (doseq [chunk-group chunk-parted]
       (mc/insert-batch db collname (map identity chunk-group)))))
 
-      ;; Add this function to store status updates (ts = epoch ms, iso = iso timestamp, msg = string)
-(defn addUpdate! [update]
-  (let [conn (mg/connect {:host hostname})
-        db   (mg/get-db conn dbname)]
-    ;; ensure statusUpdates collection exists and has an index on ts (ascending)
-    (try
-      (mc/ensure-index db "statusUpdates" (array-map :ts 1) {:background true})
-      (catch Exception _))
-    (mc/insert db "statusUpdates" update)))
-
-;; Convenience: function to count status updates (optional)
-(defn count-status-updates []
-  (let [conn (mg/connect {:host hostname})
-        db   (mg/get-db conn dbname)]
-    (mc/count db "statusUpdates")))
-
-
 (defn store-clones! [clones]
-  (let [conn (mg/connect {:host hostname})
+  (let [conn (mg/connect {:host hostname})        
         db (mg/get-db conn dbname)
         collname "clones"
         clones-parted (partition-all partition-size clones)]
@@ -70,20 +69,21 @@
       (mc/insert-batch db collname (map identity clone-group)))))
 
 (defn identify-candidates! []
-  (let [conn (mg/connect {:host hostname})
+  (let [conn (mg/connect {:host hostname})        
         db (mg/get-db conn dbname)
         collname "chunks"]
      (mc/aggregate db collname
-                   [{$group {:_id {:chunkHash "$chunkHash"}
+                   [{$group {:_id "$chunkHash" ; <-- THE REAL FIX
                              :numberOfInstances {$count {}}
                              :instances {$push {:fileName "$fileName"
-                                                :startLine "$startLine"
-                                                :endLine "$endLine"}}}}
+                                             :startLine "$startLine"
+                                             :endLine "$endLine"}}}}
                     {$match {:numberOfInstances {$gt 1}}}
                     {"$out" "candidates"} ])))
 
+
 (defn consolidate-clones-and-source []
-  (let [conn (mg/connect {:host hostname})
+  (let [conn (mg/connect {:host hostname})        
         db (mg/get-db conn dbname)
         collname "clones"]
     (mc/aggregate db collname
@@ -111,6 +111,7 @@
                                }}}}}]
                      :as "sourceContents"}}
                    {$project {:_id 0 :instances 1 :contents "$sourceContents.contents"}}])))
+
 
 (defn get-dbconnection []
   (mg/connect {:host hostname}))
@@ -160,21 +161,24 @@
         anonymous-clone (select-keys clone [:numberOfInstances :instances])]
     (mc/insert db collname anonymous-clone)))
 
-;; ------------------------------------------------------------------
-;; addUpdate! - store timestamped status messages in 'statusUpdates'
-;; payload is expected to be a map like {:ts <ms> :iso <iso-string> :msg <string>}
-;; ------------------------------------------------------------------
-(defn addUpdate! [update-map]
-  (let [conn (mg/connect {:host hostname})
+(defn addUpdate! [timestamp message]
+  (let [conn (mg/connect {:host hostname})        
         db (mg/get-db conn dbname)
-        collname "statusUpdates"
-        ;; make safe doc from given map
-        doc (cond
-              (map? update-map) update-map
-              (string? update-map) {:ts (System/currentTimeMillis) :msg update-map}
-              :else {:ts (System/currentTimeMillis) :msg (str update-map)})]
+        collname "statusUpdates"]
     (try
-      (mc/insert db collname doc)
+      (mc/insert db collname {:timestamp (.toString timestamp) :message message})
       (catch Exception e
-        ;; swallow errors; callers should not fail because of logging issues
-        (println "storage/addUpdate!: failed to insert status update:" (.getMessage e))))))
+        ; Print to stderr to avoid a loop if db logging fails
+        (.println System/err (str "Failed to log status update: " (.getMessage e)))))))
+
+(defn create-chunks-index! []
+  (let [conn (mg/connect {:host hostname})
+        db (mg/get-db conn dbname)]
+    (println "Ensuring index on chunks.chunkHash...")
+    (mc/create-index db "chunks" (array-map :chunkHash 1))))
+
+(defn create-candidates-index! []
+  (let [conn (mg/connect {:host hostname})
+        db (mg/get-db conn dbname)]
+    (println "Ensuring index on candidates.instances.fileName...")
+    (mc/create-index db "candidates" (array-map :instances.fileName 1))))

@@ -4,9 +4,10 @@ version: "3.8"
 services:
   clone-detector:
     image: cljdetector
-    # command: clear  # Remove 'clear' to run full clone detection, or use 'clear' only to clear DB 
+    build: ./Containers/cljdetector
+    command: clear
     ports:
-      - 8080:3000
+      - "8087:3000"
     volumes:
       - ./Containers/cljdetector:/usr/src/app
       - qc-volume:/QualitasCorpus
@@ -16,29 +17,32 @@ services:
       SOURCEDIReclipse: "/QualitasCorpus/QualitasCorpus-20130901r/Systems/eclipse_SDK"
       SOURCEDIR: "/QualitasCorpus"
       CHUNKSIZE: 20
+    depends_on:
+      - dbstorage
 
   dbstorage:
     image: mongo
     restart: always
     command: --quiet --syslog
     ports:
-      - 27017:27017
+      - "27019:27017"
     expose:
       - "27017"
     volumes:
       - dbstorage:/data/db
       - dbconfig:/data/configdb
 
-  monitortool:
+  monitor-tool:
+    image: monitor
     build: ./Containers/MonitorTool
-    image: monitortool:latest
-    environment:
-      - DBHOST=dbstorage
-      - DBNAME=cloneDetector
-      - INTERVAL_MS=10000
-      - PORT=4000
     ports:
-      - "4000:4000"
+      - "8501:8501"
+    environment:
+      DBHOST: dbstorage
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+      STREAMLIT_SERVER_PORT: 8501
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_SERVER_ENABLE_IPV6: "false"   # ✅ IMPORTANT FIX
     depends_on:
       - dbstorage
 
