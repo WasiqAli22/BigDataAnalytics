@@ -7,10 +7,10 @@ import time
 import os
 import pandas as pd
 import numpy as np
+import json
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
-
 
 
 # ---------------------------
@@ -45,6 +45,7 @@ st.markdown("""
 
 st.title("Clone Detector Analytics Dashboard")
 
+
 # ---------------------------
 # DATABASE CONNECTION
 # ---------------------------
@@ -59,12 +60,40 @@ def get_db_client():
             client = pymongo.MongoClient(f"mongodb://{DB_HOST}:27017/")
             client.admin.command('ping')
             return client
-        except Exception as e:
+        except Exception:
             st.error(f"⚠️ Failed to connect to MongoDB at {DB_HOST}. Retrying...")
             time.sleep(2)
 
 client = get_db_client()
 db = client[DB_NAME]
+
+
+# ---------------------------
+# LOCAL PERSISTENCE HELPERS
+# ---------------------------
+CACHE_FILE = "stats_cache.json"
+
+def load_stats_from_cache():
+    """Load stats history from JSON file if available."""
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r") as f:
+                data = json.load(f)
+            for d in data:
+                d["Time"] = pd.to_datetime(d["Time"])
+            return data
+        except Exception:
+            return []
+    return []
+
+def save_stats_to_cache(data):
+    """Save stats history to local JSON file."""
+    try:
+        with open(CACHE_FILE, "w") as f:
+            json.dump(data, f, default=str, indent=2)
+    except Exception:
+        pass
+
 
 # ---------------------------
 # HELPER FUNCTIONS
@@ -87,19 +116,23 @@ def get_average_clone_size():
 def get_avg_chunks_per_file(files, chunks):
     return chunks / files if files else 0
 
+
 # ---------------------------
 # STATE INIT
 # ---------------------------
 if "stats" not in st.session_state:
-    st.session_state.stats = []
+    st.session_state.stats = load_stats_from_cache()
+
 if "last_run" not in st.session_state:
     st.session_state.last_run = {"timestamp": time.time(), "chunks": 0, "candidates": 0, "clones": 0}
+
 
 # Sidebar Controls
 st.sidebar.header("⚙️ Controls")
 refresh_rate = st.sidebar.slider("Refresh Interval (seconds)", 1, 10, 3)
 st.sidebar.markdown("---")
 st.sidebar.info("📊 Real-time analytics and performance monitoring for cljDetector")
+
 
 # ---------------------------
 # MAIN LOOP
@@ -148,9 +181,13 @@ while True:
             "Total Clones": clones,
             "Clone Ratio": clone_ratio
         }
+
         st.session_state.stats.append(new_entry)
         if len(st.session_state.stats) > 1500:
             st.session_state.stats.pop(0)
+
+        # Save to local JSON cache
+        save_stats_to_cache(st.session_state.stats)
 
         st.session_state.last_run = {"timestamp": now, "chunks": chunks, "candidates": candidates, "clones": clones}
         df = pd.DataFrame(st.session_state.stats).set_index("Time")
@@ -189,7 +226,8 @@ while True:
             # Clone ratio and trend
             col3, col4 = st.columns(2)
             with col3:
-                fig3 = px.area(df, y="Clone Ratio", title="Clone Ratio Trend", color_discrete_sequence=["#33FF99"], template="plotly_dark", height=300)
+                fig3 = px.area(df, y="Clone Ratio", title="Clone Ratio Trend",
+                               color_discrete_sequence=["#33FF99"], template="plotly_dark", height=300)
                 st.plotly_chart(fig3, use_container_width=True)
 
             with col4:
